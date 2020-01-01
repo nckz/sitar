@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+"""
+Sitar, the simplified incremental tape archiver.
+
+It leverages the incremental backup option built into tar:
+    https://www.gnu.org/software/tar/manual/html_node/Incremental-Dumps.html
+
+with additional commonly needed functionality for making periodic backups.
+
+Author: Nick Zwart
+Date: 2020jan01
+"""
+
+
+import os
+import sys
+import time
+import subprocess
+
+
+# Possible tar commands
+TAR_CMDS = ("tar", "gtar", "gnutar")
+
+# Possible tar locations if its not part of the env. The "" tests if tar is
+# part of the environment.
+TAR_LOCS = ("", "/bin", "/usr/local/bin", "/opt/local/bin", "/usr/bin", "/sbin")
+
+# Essentially must be GNU-tar
+TAR_INC = "--listed-incremental"
+TAR_HELP = "--help"
+
+# date stamp format
+DATE_FORMAT = "%Y%m%d_%H%M%S"
+
+# file prefix
+SNAPSHOT_PREFIX = "snapshot_"
+BACKUP_PREFIX = "backup_"
+OUTPUT_SUFFIX = ".tar.gz"
+
+# exit codes
+ERROR = 1
+
+
+def run(cmd):
+    """Run the given command with common options."""
+    return subprocess.run(cmd, shell=True, capture_output=True)
+
+
+def timeString():
+    """Generate a file-name compatible time-string for the current action."""
+    return time.strftime(DATE_FORMAT)
+
+
+def whichTar():
+    """Make sure that an appropriate tar executable is accessible to the
+    system. It must be a tar command that implements the TAR_INC command.
+    """
+    for cmd in TAR_CMDS:
+        for loc in TAR_LOCS:
+
+            # command to test
+            tarCmd = os.path.join(loc, cmd)
+            tarHelp = "{} {}".format(tarCmd, TAR_HELP)
+
+            # run tar help to see if it exists
+            out = run(tarHelp)
+
+            # squash any Nones in captured text
+            txt = ''
+            if out.stdout is not None:
+                txt += out.stdout.decode('utf8')
+            if out.stderr is not None:
+                txt += out.stderr.decode('utf8')
+
+            # check if the incremental option is in the help text
+            if TAR_INC in txt:
+                return tarCmd
+
+
+class Tar():
+    """A binding for the system tar command."""
+
+    def __init__(self, backupPath, numIncrement=5, numSnapshots=3):
+        """Find a tar command and set it for subsequent usage."""
+        # make sure there is a working tar command
+        self._tar = whichTar()
+        if self._tar is None:
+            sys.stderr.write("No suitable tar command was found.\n")
+            sys.exit(ERROR)
+
+        # make sure the backup path exists
+        if not os.path.isdir(backupPath):
+            os.makedirs(backupPath, exist_ok=True)
+        if not os.path.isdir(backupPath):  # ensure the directory exists
+            sys.stderr.write("Cannot create directory '{}'\n".format(backupPath))
+            sys.exit(ERROR)
+        self._bpath = backupPath
+
+        # list all snapshot and backup files
+        # sort them in order of time, earliest to latest
+        lst = os.listdir(backupPath)
+        tarfiles = sorted([path for path in lst if BACKUP_PREFIX in path])
+        snapfiles = sorted([path for path in lst if SNAPSHOT_PREFIX in path])
+
+        # see if a snapshot exists
+        self._snap = None
+        if len(snapfiles):
+
+            # see how many increments have been made since the last snapshot
+            # start by getting the latest snapshot date
+            snapdate = snapfiles[-1].split(SNAPSHOT_PREFIX)[-1]
+
+            # find the index of the corresponding backup tarball
+            for i, path in enumerate(tarfiles):
+                if snapdate in path:
+                    break
+            niters = len(tarfiles) - i
+
+            # if the number of iters has exceeded the desired, then don't pass
+            # on the existing snapshot name.
+            if niters > numIncrement:
+                self._snap = None
+            else:
+                # pop the latest snapshot
+                self._snap = os.path.join(self._bpath, snapfiles[-1])
+
+    def backup(self, targets):
+        """tar the given list of targets with incremental."""
+        assert isinstance(targets, (list, tuple))  # make sure its the right type
+        assert all([os.path.exists(path) for path in targets])  # all targets must exist
+
+        # the time of this operation; if a new snapshot is to be made then it
+        # will have the same time stamp as the tarball
+        optime = timeString()
+
+        # generate a new snapshot and therefore a new tarball copy
+        if self._snap is None:
+            snap = os.path.join(self._bpath, SNAPSHOT_PREFIX + optime)
+            print("Generating a new snapshot... [{}]".format(snap))
+        else:
+            snap = self._snap  # use existing snapshot
+            print("Using existing snapshot reference. [{}]".format(snap))
+
+        # assemble the tar command
+        kargs = {}
+        kargs["tar"] = self._tar
+        kargs["backup-file"] = os.path.join(self._bpath, BACKUP_PREFIX + optime + OUTPUT_SUFFIX)
+        kargs["inc-opt"] = TAR_INC
+        kargs["snapshot"] = snap
+        kargs["targets"] = ' '.join(targets)
+        cmd = "{tar} -czf {backup-file} {inc-opt}={snapshot} {targets}".format(**kargs)
+
+        # run the incremental tar
+        out = run(cmd)
+
+        # write errors if the executable failed
+        if out.returncode != 0:
+            sys.stderr.write(out.stderr)
+            sys.exit(ERROR)
+
+
+if __name__ == "__main__":
+
+    import argparse
+
+    parser = argparse.ArgumentParser(prog='sitar')
+    parser.add_argument('backup_path', help='The backup directory path.')
+    parser.add_argument('target_path', nargs='+', help='The paths to backup.')
+    args = parser.parse_args()
+
+    # start a tar instance
+    tar = Tar(args.backup_path)
+
+    tar.backup(args.target_path)
