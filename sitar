@@ -115,7 +115,7 @@ class Tar():
 
             # if the number of iters has exceeded the desired, then don't pass
             # on the existing snapshot name.
-            if niters > numIncrement:
+            if (niters > numIncrement) and (numIncrement >= 0):
                 self._snap = None
             else:
                 # pop the latest snapshot
@@ -198,17 +198,30 @@ class Tar():
             snap = os.path.join(self._bpath, SNAPSHOT_PREFIX + optime)
             print("Generating a new snapshot... [{}]".format(snap))
 
+            # if a negative number is used then don't remove any snapshots
+            if self._nshots < 0:
+                pass
+
             # if a new snapshot is being generated, then delete any overages
             # first; count THIS copy too by adding one.
-            if (self._countSnapshots() + 1) > self._nshots:
+            elif (self._countSnapshots() + 1) > self._nshots:
 
-                # get list of snapshots
-                _, snaps = self._listBackups()
+                # use the current time to remove any older snapshots if zero
+                # old snapshots are requested
+                if self._nshots == 0:
+                    date = optime
 
-                # get the last snapshot to be saved, zero-based indexing,
-                # counting the one to be generated too (subtract two).
-                date = self._getDateFromFilename(snaps[self._nshots - 2])
-                print('threshold date', date)
+                # if one or more old snapshots are requested then find out
+                # which snapshots should be removed.
+                else:
+                    # get list of snapshots
+                    _, snaps = self._listBackups()
+
+                    # get the last snapshot to be saved, zero-based indexing,
+                    # counting the one to be generated too (subtract two).
+                    date = self._getDateFromFilename(snaps[-self._nshots])
+
+                # remove all older snaps and inc-tars
                 self._removeSnapshot(date)
 
         else:
@@ -238,8 +251,8 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(prog='sitar')
-    parser.add_argument('--increments', '-i', type=int, default=5, help='The number of increments to keep before starting another snapshot.')
-    parser.add_argument('--snapshots', '-s', type=int, default=3, help='The number of older snapshot copies to keep (i.e. ring buffer).')
+    parser.add_argument('--increments', '-i', type=int, default=5, help="The number of increments to keep before starting another snapshot. A value of '0' will simply perform a full tar archive on each run. Negative values will produce unlimited increments.")
+    parser.add_argument('--snapshots', '-s', type=int, default=3, help="The number of older snapshot copies to keep (i.e. ring buffer). A value of '0' will only keep one snapshot at a time. Negative values will produce unlimited snapshots.")
     parser.add_argument('backup_path', help='The backup directory path.')
     parser.add_argument('target_path', nargs='+', help='The paths to backup.')
     args = parser.parse_args()
