@@ -97,10 +97,7 @@ class Tar():
         self._bpath = backupPath
 
         # list all snapshot and backup files
-        # sort them in order of time, earliest to latest
-        lst = os.listdir(backupPath)
-        tarfiles = sorted([path for path in lst if BACKUP_PREFIX in path])
-        snapfiles = sorted([path for path in lst if SNAPSHOT_PREFIX in path])
+        tarfiles, snapfiles = self._listBackups()
 
         # see if a snapshot exists
         self._snap = None
@@ -124,6 +121,65 @@ class Tar():
                 # pop the latest snapshot
                 self._snap = os.path.join(self._bpath, snapfiles[-1])
 
+        # save the number of requested snapshots
+        self._nshots = numSnapshots
+
+    def _listOldBackups(self, date):
+        """Return a list of old snaps and tarballs older than the date given."""
+        # list all snapshot and backup files
+        tarfiles, snapfiles = self._listBackups()
+
+        # make dummy listings for sorting dates
+        tbz = BACKUP_PREFIX + date + OUTPUT_SUFFIX
+        snp = SNAPSHOT_PREFIX + date
+
+        # sort to get all older files than the given date
+        tarfiles = sorted(tarfiles + [tbz])
+        snapfiles = sorted(snapfiles + [snp])
+
+        # get the date threshold index (the index to keep)
+        oldtars = tarfiles[:tarfiles.index(tbz)]
+        oldsnap = snapfiles[:snapfiles.index(snp)]
+
+        return oldtars, oldsnap
+
+    def _getDateFromFilename(self, fname):
+        """Return the date string from the filename."""
+        if fname.endswith(OUTPUT_SUFFIX):
+            fname = fname.split(OUTPUT_SUFFIX)[0]
+        if fname.startswith(SNAPSHOT_PREFIX):
+            fname = fname.split(SNAPSHOT_PREFIX)[-1]
+        if fname.startswith(BACKUP_PREFIX):
+            fname = fname.split(BACKUP_PREFIX)[-1]
+        return fname
+
+    def _countSnapshots(self):
+        """Return the number of snapshots."""
+        return len(self._listBackups()[1])
+
+    def _countOldSnapshots(self, date):
+        """Get a count of all old snaps."""
+        return len(self._listOldBackups(date)[1])
+
+    def _removeSnapshot(self, date):
+        """Remove all snapshots and increments older than the given the date
+        mark.
+        """
+        oldtars, oldsnap = self._listOldBackups(date)
+
+        # remove all old tars and snaps
+        [os.remove(os.path.join(self._bpath, path)) for path in oldtars + oldsnap]
+
+    def _listBackups(self):
+        """Return two lists; one of snapshots and one of tarball backups."""
+        # list all snapshot and backup files
+        # sort them in order of time, earliest to latest
+        backupPath = self._bpath
+        lst = os.listdir(backupPath)
+        tarfiles = sorted([path for path in lst if BACKUP_PREFIX in path])
+        snapfiles = sorted([path for path in lst if SNAPSHOT_PREFIX in path])
+        return tarfiles, snapfiles
+
     def backup(self, targets):
         """tar the given list of targets with incremental."""
         assert isinstance(targets, (list, tuple))  # make sure its the right type
@@ -133,10 +189,28 @@ class Tar():
         # will have the same time stamp as the tarball
         optime = timeString()
 
+        # make sure we can't overwrite an existing file due to 1 second
+        # time resolution
+        time.sleep(1)
+
         # generate a new snapshot and therefore a new tarball copy
         if self._snap is None:
             snap = os.path.join(self._bpath, SNAPSHOT_PREFIX + optime)
             print("Generating a new snapshot... [{}]".format(snap))
+
+            # if a new snapshot is being generated, then delete any overages
+            # first; count THIS copy too by adding one.
+            if (self._countSnapshots() + 1) > self._nshots:
+
+                # get list of snapshots
+                _, snaps = self._listBackups()
+
+                # get the last snapshot to be saved, zero-based indexing,
+                # counting the one to be generated too (subtract two).
+                date = self._getDateFromFilename(snaps[self._nshots - 2])
+                print('threshold date', date)
+                self._removeSnapshot(date)
+
         else:
             snap = self._snap  # use existing snapshot
             print("Using existing snapshot reference. [{}]".format(snap))
@@ -164,11 +238,13 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(prog='sitar')
+    parser.add_argument('--increments', '-i', type=int, default=5, help='The number of increments to keep before starting another snapshot.')
+    parser.add_argument('--snapshots', '-s', type=int, default=3, help='The number of older snapshot copies to keep (i.e. ring buffer).')
     parser.add_argument('backup_path', help='The backup directory path.')
     parser.add_argument('target_path', nargs='+', help='The paths to backup.')
     args = parser.parse_args()
 
     # start a tar instance
-    tar = Tar(args.backup_path)
+    tar = Tar(args.backup_path, numIncrement=args.increments, numSnapshots=args.snapshots)
 
     tar.backup(args.target_path)
