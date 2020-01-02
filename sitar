@@ -80,8 +80,12 @@ def whichTar():
 class Tar():
     """A binding for the system tar command."""
 
-    def __init__(self, backupPath, numIncrement=5, numSnapshots=3):
+    def __init__(self, backupPath, numIncrement=5, numSnapshots=3, quiet=False):
         """Find a tar command and set it for subsequent usage."""
+
+        # determine if the runner should be silent
+        self._quiet = quiet
+
         # make sure there is a working tar command
         self._tar = whichTar()
         if self._tar is None:
@@ -196,7 +200,8 @@ class Tar():
         # generate a new snapshot and therefore a new tarball copy
         if self._snap is None:
             snap = os.path.join(self._bpath, SNAPSHOT_PREFIX + optime)
-            print("Generating a new snapshot... [{}]".format(snap))
+            if not self._quiet:
+                print("Generating a new snapshot... [{}]".format(snap))
 
             # if a negative number is used then don't remove any snapshots
             if self._nshots < 0:
@@ -226,7 +231,8 @@ class Tar():
 
         else:
             snap = self._snap  # use existing snapshot
-            print("Using existing snapshot reference. [{}]".format(snap))
+            if not self._quiet:
+                print("Using existing snapshot reference. [{}]".format(snap))
 
         # assemble the tar command
         kargs = {}
@@ -253,11 +259,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(prog='sitar')
     parser.add_argument('--increments', '-i', type=int, default=5, help="The number of increments to keep before starting another snapshot. A value of '0' will simply perform a full tar archive on each run. Negative values will produce unlimited increments.")
     parser.add_argument('--snapshots', '-s', type=int, default=3, help="The number of older snapshot copies to keep (i.e. ring buffer). A value of '0' will only keep one snapshot at a time. Negative values will produce unlimited snapshots.")
+    parser.add_argument('--quiet', '-q', action='store_true', help="Don't print operational indications.")
     parser.add_argument('backup_path', help='The backup directory path.')
     parser.add_argument('target_path', nargs='+', help='The paths to backup.')
     args = parser.parse_args()
 
     # start a tar instance
-    tar = Tar(args.backup_path, numIncrement=args.increments, numSnapshots=args.snapshots)
+    tar = Tar(args.backup_path, numIncrement=args.increments, numSnapshots=args.snapshots, quiet=args.quiet)
 
+    # execute backup of the given paths
     tar.backup(args.target_path)
